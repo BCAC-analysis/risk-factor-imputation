@@ -1,0 +1,374 @@
+---
+title: "imputation_markdown"
+author: "Lorena Sandoval"
+date: "12/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load required libraries
+```{r}
+library(devtools)
+library(dplyr)
+library(tibble)
+library(mice)
+library(data.table)
+library(bc3)
+#library(bc3, lib.loc ="/home/sandovall2/R/R-3.6.1/") #biowulf BC3 directory
+```
+## Read in data
+```{r}
+getwd()
+origin_data<- data.frame(read.csv("analyse_cleaned_reduced_20200403.csv"))
+setwd("C:/Users/sandovall2/Box/BCAST Risk Factor/Datasets/Input Data")
+```
+
+## Make 2 lists of variables to be used in and excluded from imputations
+```{r}
+nonimp = select(origin_data,-c("ageMenarche","parous","parity","mensAgeLast","postmeno","ageFFTP","breastMos","lastChildAge","study","refage","StudyCountry"))
+imp = select(origin_data,c("ageMenarche","parous","parity","mensAgeLast","postmeno","ageFFTP","breastMos","lastChildAge","study","refage","StudyCountry"))
+```
+
+## IMPUTATION 1: PAROUS AND AGEMENARCHE 
+```{r}
+# initialize imputation parameters
+init <- mice(origin_data, maxit = 0)
+# remove variables as a predictors 
+predM = init$predictorMatrix
+predM[,non_imp_cols]=0
+# skip variables from imputation
+meth = init$method
+meth[non_imp_cols]=""
+
+first_imp <- mice(origin_data,m=1,seed=i1+1,method=meth,predictorMatrix = predM, visitSequence = "monotone",print=FALSE)  
+first_imp$method
+imp1=complete(first_imp,1)
+print("summary: parity, parous (post-imp1), and parous (pre-imp1)")
+summary(imp1$parity)
+summary(imp1$parous)
+summary(origin_data$parous)
+
+############ Plot and save the mean and standard deviation (variance) of the synthetic values plotted against iteration number for the imputed data.
+print("----------------- Imp1: Check for convergence by plotting one or more parameters against the iteration number---------------")
+pdf(paste0("imputation1_parous_convergenceplot_",i1,".pdf"))
+plot(first_imp)
+dev.off()
+
+############## Save mice density plot1-----------------------------------------------------------------------------------------
+pdf(paste0("imputation1_parous_densityplot_",i1,".pdf"))
+densityplot(first_imp,~parous)
+dev.off()
+pdf(paste0("imputation1_agemenarche_densityplot_",i1,".pdf"))
+densityplot(first_imp,~ageMenarche )
+dev.off()
+print("saved parous and agemenarche mice density plot from first imputation")
+
+print("----reset values of parity,tslb,lastChildAge,ageFFTP,breastMos,mensAgeLast,and ageMenarche-----")
+imp1$parity = origin_data$parity
+imp1$lastChildAge = origin_data$lastChildAge
+imp1$ageFFTP = origin_data$ageFFTP
+imp1$breastMos = origin_data$breastMos
+imp1$mensAgeLast = origin_data$mensAgeLast
+
+print("-----------Samples where parous=0 and parity is missing-----------")
+idx<- which(imp1$parous==0 & is.na(imp1$parity)) 
+nrow(imp1[idx,])
+print("----------- Fixed: if parous=0, then parity should be zero---------")
+imp1$parity[idx]<-0
+print("----------- Fix: if parous=0, then breastMos should be zero---------")
+idx<- which(imp1$parous==0 & is.na(imp1$breastMos))
+imp1$breastMos[idx]<-0
+
+print("-----------Samples where parous=1 and parity is missing-----------")
+idx<- which(imp1$parous==1 & is.na(imp1$parity))
+nrow(select(imp1,imp_cols)[idx,])
+
+# checks for parous and parity
+print("----Number of nulliparous women")
+idx= which(imp1$parous==0)
+nrow(imp1[idx,])
+print("----Number of women with parity=0")
+idx1= which(imp1$parity==0)
+nrow(imp1[idx1,])
+print("----Number of parous women")
+idx= which(imp1$parous==1)
+nrow(imp1[idx,])
+print("----Number of women with parity>0 or parity=NA")
+idx1= which(is.na(imp1$parity) | imp1$parity>0)
+nrow(imp1[idx1,])
+```
+
+## IMPUTATION 2: PARITY (PAROUS SAMPLES ONLY) 
+```{r}
+# Subset Parous and nulliparous
+Parous= imp1[imp1$parous==1,] #parous
+Nulliparous= imp1[imp1$parous==0,] #nulliparous
+summary(select(Parous,imp_cols))
+
+
+# initialize imputation parameters
+init <- mice(Parous, maxit = 0)
+# remove variables as a predictors 
+predM = init$predictorMatrix
+predM[, non_imp_cols]=0
+# skip variables from imputation
+meth = init$method
+meth[non_imp_cols]=""
+# set post processing paramters
+post <- init$post
+# ensure imputed parity is between 1 and 16
+post["parity"] <- "imp[[j]][, i] <- squeeze(imp[[j]][, i], c(1,16))"
+
+second_imp <- mice(Parous,m=1,method=meth, predictorMatrix=predM, post= post,seed=i1+2, visitSequence = "monotone",print=FALSE) 
+second_imp$method
+imp2=complete(second_imp,1)
+
+############ Plot and save the mean and standard deviation (variance) of the synthetic values plotted against iteration number for the imputed data.
+print("----------------- Imp2: Check for convergence by plotting one or more parameters against the iteration number---------------")
+pdf(paste0("imputation2_parity_convergenceplot_",i1,".pdf"))
+plot(second_imp)
+dev.off()
+
+############## Save mice density plot1-----------------------------------------------------------------------------------------
+pdf(paste0("imputation2_parity_densityplot_",i1,".pdf"))
+densityplot(second_imp,~parity)
+dev.off()
+
+############## Return some imputed columns to original with missings to feed into third imputation
+print("----reset values of mensAgeLast,lastChildAge,ageFFTP,breastMos-----")
+imp2$mensAgeLast <- Parous$mensAgeLast
+imp2$lastChildAge <- Parous$lastChildAge
+imp2$ageFFTP <- Parous$ageFFTP
+imp2$breastMos <- Parous$breastMos
+
+print("------------------summary of imp2 ----------------")
+summary(select(imp2,imp_cols))
+```
+
+
+### IMPUTATION 3: AGEFFTP (PAROUS SAMPLES) 
+```{r}
+# initialize imputation parameters
+init <- mice(imp2, maxit = 0)
+# remove variables as a predictors 
+predM = init$predictorMatrix
+predM[, non_imp_cols]=0
+# skip variables from imputation
+meth = init$method
+meth[non_imp_cols]=""
+# set post processing paramters
+post <- init$post
+# ensure imputed ageFFTP is equal to or less than refage
+post["ageFFTP"] <- "imp[[j]][, i] <- pmin(imp[[j]][, i], init$data$refage[!r[,j]])"
+
+
+third_imp <- mice(imp2,m=1,method=meth, predictorMatrix=predM, post= post,seed=i1+3, visitSequence = "monotone",print=FALSE)  
+third_imp$method
+imp3=complete(third_imp,1)
+
+############ Plot and save the mean and standard deviation (variance) of the synthetic values plotted against iteration number for the imputed data.
+print("----------------- Imp3: Check for convergence by plotting one or more parameters against the iteration number---------------")
+pdf(paste0("imputation3_ageFFTP _convergenceplot_",i1,".pdf"))
+plot(third_imp)
+dev.off()
+
+############## Save mice density plot1-----------------------------------------------------------------------------------------
+pdf(paste0("imputation3_ageFFTP _densityplot_",i1,".pdf"))
+densityplot(third_imp,~ageFFTP )
+dev.off()
+
+############## Return some imputed columns to original with missings to feed into fourth imputation
+print("----reset values of mensAgeLast,lastChildAge,breastMos-----")
+imp3$mensAgeLast <- imp2$mensAgeLast
+imp3$lastChildAge <- imp2$lastChildAge
+imp3$breastMos <- imp2$breastMos
+
+print("---------- summary of imp3-------------")
+summary(select(imp3,imp_cols))
+
+############## Check results
+# ageFFTP<= refage
+idx = which(imp3$ageFFTP>imp3$refage)
+ageFFTP_errors_imp3 = imp3[idx,imp_cols]
+print("-------Check results of imp3, # samples where agefftp>refage:-----------")
+nrow(ageFFTP_errors_imp3[idx,])
+
+############## manual post-processing: set lastchildage to ageFFTP when parity=1 
+idx = which(imp3$parity==1 & is.na(imp3$lastChildAge))
+imp3$lastChildAge[idx] = imp3$ageFFTP[idx]
+```
+
+## IMPUTATION 4: lastChildAge,breastMos  
+```{r}
+print("BEGIN 4th IMPUTATION: lastChildAge,breastMos")
+# initialize imputation parameters
+init <- mice(imp3, maxit = 0)
+
+#pred<-quickpred(imp3, minpuc=0.15, mincor = 0.15)
+
+# remove variables as a predictors 
+predM = init$predictorMatrix
+predM[, non_imp_cols]=0
+
+# skip variables from imputation
+meth = init$method
+meth[non_imp_cols]=""
+
+# set post processing paramters
+post <- init$post
+#post["lastChildAge"] <- "imp[[j]][, i] <- squeeze(imp[[j]][, i],c(init$data$ageFFTP[!r[,j]], init$data$refage[!r[,j]]))"
+post["lastChildAge"] <- "imp[[j]][, i] <-pmin(pmax(imp[[j]][, i], init$data$ageFFTP[!r[,j]]), init$data$refage[!r[,j]])"
+
+fourth_imp <- mice(imp3, m=1,seed=i1+4,post=post, method=meth,predictorMatrix=predM, print=FALSE)
+print("Methods in fourth imputation")
+fourth_imp$method
+#fourth_imp$loggedEvents
+imp4= complete(fourth_imp,1)
+print("-------summary imp4$lastchildage-------------")
+summary(imp4$lastChildAge)
+
+############## Save imp4 lastchildage histogram-----------------------------------------------------------------------------------------
+pdf(paste0("imputation4_lastchildage _histogram_",i1,".pdf"))
+hist(imp4$lastChildAge)
+dev.off()
+
+############ Plot and save the mean and standard deviation (variance) of the synthetic values plotted against iteration number for the imputed data.
+print("----------------- Imp4: Check for convergence by plotting one or more parameters against the iteration number---------------")
+pdf(paste0("imputation4_lastChildAge_breastMos_convergenceplot_",i1,".pdf"))
+plot(third_imp)
+dev.off()
+
+############## Save mice density plots for lastchildage and breastmos-------------------------
+pdf(paste0("imputation4_lastChildAge_densityplot_",i1,".pdf"))
+densityplot(fourth_imp,~lastChildAge)
+dev.off()
+
+pdf(paste0("imputation4_breastMos_densityplot_",i1,".pdf"))
+densityplot(fourth_imp,~breastMos)
+dev.off()
+
+print("-----------rows where lastchildage is erroneoulsy greater than refage or less than agefftp-----------")
+idx<- which(imp4$lastChildAge<imp2$ageFFTP | imp4$lastChildAge>imp2$refage)
+lastch <- select(imp4[idx,],imp_cols)
+nrow(lastch) 
+
+# check distribution of lastchildage pre and post imputation
+hist1<- hist(Parous$lastChildAge)
+hist2<- hist(imp4$lastChildAge)
+
+############## Reset mensagelast and tslb values back
+imp4$mensAgeLast <- imp3$mensAgeLast
+
+print("---------- summary of imp4-------------")
+summary(select(imp4,imp_cols))
+
+############# Combine rows of parous and nulliparous samples 
+imp4=rbind(imp4,Nulliparous)
+
+############# Add tslb data to newly imputed parous samples
+imp4$tslb = NA
+idx = which(imp4$parous==1)
+imp4$tslb[idx]<- imp4$refage[idx]-imp4$lastChildAge[idx]
+
+
+print("---------Negative tslb values------")
+idx<- which(imp4$tslb<0)
+neg_tslb <- imp4[idx,]
+nrow(neg_tslb )
+```
+
+## FIFTH IMPUTATION OF MENSAGELAST
+```{r}
+############# Subset data based on pre-menopausal and post-menopausal
+print("--------------BEGIN FIFTH IMPUTATION-------------")
+PostMeno= imp4[imp4$postmeno==1,] #postmenopausal should not have missing mensagelast
+PreMeno= imp4[imp4$postmeno==0,] #premeno should have missing mensagelast
+
+# initialize imputation parameters
+init <- mice(PostMeno, maxit = 0)
+# remove variables as a predictors 
+predM = init$predictorMatrix
+predM[, non_imp_cols]=0
+# skip variables from imputation
+meth = init$method
+meth[non_imp_cols]=""
+
+fifth_imp <- mice(PostMeno,predictorMatrix=predM, method=meth,visitSequence="monotone",seed=i1+5,m=1,print=FALSE)
+print("5th imputation complete: mensagelast")
+fifth_imp$method
+imp5= complete(fifth_imp,1)
+
+############ Plot and save the mean and standard deviation (variance) of the synthetic values plotted against iteration number for the imputed data.
+print("----------------- Imp5: Check for convergence by plotting one or more parameters against the iteration number---------------")
+pdf(paste0("imputation4_mensAgeLast_convergenceplot_",i1,".pdf"))
+plot(third_imp)
+dev.off()
+
+############## Save mice density plots for lastchildage and breastmos-------------------------
+pdf(paste0("imputation5_mensAgeLast_densityplot_",i1,".pdf"))
+densityplot(fifth_imp,~mensAgeLast)
+dev.off()
+
+############# Reset lastChildAge, ageFFTP, breastMos and tslb except mensagelast
+imp5$lastChildAge<-PostMeno$lastChildAge
+imp5$ageFFTP<-PostMeno$ageFFTP
+imp5$breastMos<-PostMeno$breastMos
+imp5$tslb<-PostMeno$tslb
+summary(imp4$breastMos)
+print("----------Summary of imp5-------------")
+summary(select(imp5,imp_cols))
+
+############# Combine imputed and non-imputed rows
+imp5<-rbind(imp5,PreMeno)
+
+print("----- Return imputed some imputed columns to original with missings----")
+summary(imp5)
+table(imp5$parous,imp5$parity)
+
+print("---- Summary of lastChildAge in imp5-------")
+summary(imp5$lastChildAge)
+print("--------Summary of tslb in imp5----------")
+summary(imp5$tslb)
+
+summary(select(imp5,imp_cols))
+print("--------Table of parous in imp5----------")
+table(imp5$parous)
+
+#save subset and preprocessed file
+#save.image(file="three_imputations_workspace_incl_parous.Rdata")
+write.csv(imp5, paste0("5imp_biowulf_120320_",i1,".csv"), row.names = FALSE)
+
+#################################### CATEGORIZATION OF IMPUTED DATA  ###################################### 
+
+data<-imp5
+print("---------------------------Total samples ---------------------------")
+print(nrow(data))
+
+############### FOCUS ON CONTROLS AND INVASIVE BREAST CANCER CASES
+
+print("--------- Only keep samples of controls and invasive breast cancer cases (o,1) ---------")
+idx<- which(data$status==0|data$status==1)
+data <- data[idx,]
+print(nrow(data))
+
+print("--------------------------- Table of status ---------------------------")
+table(data$status)
+print("--------------------------- Table of study ---------------------------")
+table(data$study)
+summary(data$study)
+
+############## TUMOR MARKERS
+
+print("--------------------------- Table of study by ER_status1 ---------------------------")
+table(data$study,data$ER_status1)
+summary(data$ER_status1)
+print("--------------------------- Table of study by PR_status1 ---------------------------")
+table(data$study,data$PR_status1)
+print("--------------------------- Table of study by HER2_status1 ---------------------------")
+table(data$study,data$HER2_status1)
+print("--------------------------- Table of study by Grade1 ---------------------------")
+table(data$study,data$Grade1)
+```
